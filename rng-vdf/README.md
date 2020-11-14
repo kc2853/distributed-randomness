@@ -1,4 +1,4 @@
-# Rng
+# VDF
 
-**TODO: Add description**
+Wesolowski's VDF in RSA group - broadcast + VDF 
 
