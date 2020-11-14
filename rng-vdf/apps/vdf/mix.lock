@@ -1,0 +1,4 @@
+%{
+  "crypto": {:git, "https://github.com/erlang/otp.git", "34ee1bc943cabdc05412d09efe88daff5df31c39", []},
+  "ndpar_lib": {:git, "https://github.com/ndpar/erlang.git", "14ac8ecfe1a795ba9e3aa1caa799ae03918d7a72", []},
+}
