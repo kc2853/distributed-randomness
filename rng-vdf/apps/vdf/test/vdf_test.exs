@@ -5,14 +5,16 @@ defmodule VdfTest do
   import Kernel,
     except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
 
-  # test "setup" do
-  #   caller = self()
-  #   IO.puts("Caller pid is #{inspect(caller)}")
-  #    pp = Vdf.setup(nil, 8, 20, caller)
-  #    IO.puts("N is #{pp.n}, T is #{pp.t}")
-  #   #  IO.puts("#{inspect(pp.primes)}")
-  #    assert pp.t == 20, "N mismatch"
-  # end
+  @moduletag timeout: :infinity
+
+#   test "setup" do
+#     caller = self()
+#     IO.puts("Caller pid is #{inspect(caller)}")
+#      pp = Vdf.setup(nil, 8, 20, caller)
+#      IO.puts("N is #{pp.n}, T is #{pp.t}")
+#     #  IO.puts("#{inspect(pp.primes)}")
+#      assert pp.t == 20, "N mismatch"
+#   end
 
 #   test "eval and verify" do
 #     pp = Vdf.setup(nil, 8, 6)
@@ -26,27 +28,34 @@ defmodule VdfTest do
 #  end
 
 
-test "With nodes for 1 round of randomness" do
+test "With nodes for N round of randomness" do
   Emulation.init()
   caller = self()
 
   nodes = [:a, :b, :c, :d]
-  # Start the processes
-  base_client = Vdf.Client.setup_client(caller, 1, nodes)
-  IO.puts("Client Setup done")
-  client = spawn(:client, fn -> Vdf.Client.become_client(base_client) end)
+  lambda = 16
+  time = 4000
+  rcount = 7
+  client = spawn(:client, fn -> Vdf.become_client(nodes, lambda, time, rcount, caller) end)
 
-
-  base_config = Vdf.setup(nodes, 16, 200, :client) # Identify nodes by numbers rather than alphabet??
-  IO.puts("Node setup done")
+  base_config = receive do
+            state -> 
+              state
+              # IO.puts("State received #{inspect(state)}")
+          end
+  IO.puts("Base State is #{inspect(base_config)}")
+  # base_config = Vdf.setup_client(nodes, lambda, time, caller) # Identify nodes by numbers rather than alphabet??
+  # IO.puts("Config is #{inspect(base_config)}")
+  IO.puts("Public setup done")
   spawn(:a, fn -> Vdf.become_node(base_config) end)
   spawn(:b, fn -> Vdf.become_node(base_config) end)
   spawn(:c, fn -> Vdf.become_node(base_config) end)
   spawn(:d, fn -> Vdf.become_node(base_config) end)
 
-  # Start listenining for reply from Client (not the vdf nodes)
+  # # Start listenining for reply from Client (not the vdf nodes)
   receive do
-    {rnum, res} -> IO.puts("In tester, Random number generated is #{inspect(rnum)} and status is #{res}")
+    # {rnum, res} -> IO.puts("In tester, Random number generated is #{inspect(rnum)} and status is #{res}")
+    res -> IO.puts("In tester, Random number generated is #{inspect(res)}")
   end
   
 end

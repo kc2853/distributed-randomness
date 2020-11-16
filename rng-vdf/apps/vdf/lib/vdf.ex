@@ -12,7 +12,9 @@ defmodule Vdf do
     lambda: nil, # no of bits
     n: nil,
     t: nil,
-    caller: nil
+    count_r: nil,
+    client: nil,
+    tester: nil
   )
 
 
@@ -26,13 +28,14 @@ defmodule Vdf do
   end
 
 
-  @spec setup(
+  @spec setup_client(
           [atom()],
           non_neg_integer(),
           non_neg_integer(),
-          atom()
+          non_neg_integer(),
+          pid()
         ) :: %Vdf{}
-  def setup(view, lambda, time, c) do
+  def setup_client(view, lambda, time, count, test) do
     i = div(lambda, 2)
     # IO.puts("lambda is #{lambda}, i is #{i}")
     p = :primes.random_prime(:maths.pow(2, i - 1), :maths.pow(2, i) - 1)
@@ -49,9 +52,13 @@ defmodule Vdf do
       lambda: lambda, 
       n: n,
       t: time,
-      caller: c
+      count_r: count,
+      client: whoami(),
+      tester: test
     }
   end
+
+  
 
   @spec eval( # This will not be a new process. The execution has to stop for this.
     %Vdf{},
@@ -161,29 +168,19 @@ defmodule Vdf do
 
   def become_node(state) do
     IO.puts("Process #{inspect(whoami())} has started")
-    # send(state.caller, {1234, true})
-    #1. M = %{} , Create a map to keep track of the nodes from which we have received the random values
-    #2. generate a random number in the mod N group G, say r1
-    #3. count = 1
-    #4. Add (1: r1) to M
-    #5. Broadcast r1 to all nodes
-    #6. Start listening for ri's from other nodes
-    #   node(state, M, count)
-
-
-     #### Wait till all the other nodes are ready as well
-
-     # Send a message to client signalling that the process has spawned and is ready to go
-     client_addr = state.caller
-     send(client_addr, :ready)
+    client_addr = state.client
+    send(client_addr, :ready)
      # wait till all processes are ready , and receive a go-ahead from client
      receive do
        {^client_addr, :ready_all} ->
-         IO.puts("Received go ahead from client")
-         
-     end
+         IO.puts("Node #{whoami()} Received go ahead from client")
+      end
 
     IO.puts("All the nodes are ready")
+    get_random_round(state)
+  end
+
+  def get_random_round(state) do
     received_nos = %{}
     ri = :rnd.random(2, state.n - 1) ## random number in %N group
     count = 1
@@ -191,10 +188,7 @@ defmodule Vdf do
     IO.puts("The map at #{whoami()} is #{inspect(received_nos)}")
     broadcast_to_others(state, ri)
     node(state, received_nos, count)
-    
-
     #### Note: For each round of randomness, M and count would be re initialized
-    
   end
 
   def node(state, mapping, count) do
@@ -205,24 +199,6 @@ defmodule Vdf do
             node(state, Map.put(mapping, sender, random_i), count + 1)
       end
     else
-
-
-      # stop recursing
-      # Find a way to combine the values in mapping. Need to make sure that all the nodes, if given the same r_i's get the 
-      # same output. The order in which the r_is are received should not matter (maybe sort the map according to the keys??)
-      # R = Combine(r_i's)-- convert map to list with keys according to the order of processe stored in views
-      # R is a list
-      # x = Hash (R) (does x need to be in the group G? Can R and x generation be combined?)
-      # Evaluate the vdf ie 
-      # {h, pi} = Vdf.eval(state, x) 
-      # Wait for its complettion
-      # result = verify(state, x, h, pi)
-      # send {h, result} to the caller
-      # send(state.caller, {1234, true})
-
-      #### Note: This tests for a single random value. If we want to generate R random values, might need to recurse
-      # until count_random == R
-
       IO.puts("The final mapping is #{inspect(mapping)}")
       # r_out = generate_list(state, mapping)
       r_out = to_string_(Map.values(mapping))
@@ -231,86 +207,90 @@ defmodule Vdf do
       g = :maths.mod(:binary.decode_unsigned(:crypto.hash(:sha256, r_out)) ,state.n) # g = H(x) \in G
       IO.puts("g is #{inspect(g)}")
       {h, pi} = eval(state, g)
-      IO.puts("h is #{h} and pi is #{pi}")
-      result = verify(state, g, h, pi)
-      IO.puts("result is #{result}")
-      send(state.caller, {h, result})
-
+      # IO.puts("h is #{h} and pi is #{pi}")
+      # result = verify(state, g, h, pi)
+      # IO.puts("result is #{result}")
+      send(state.client, {g, h, pi})
+      get_random_round(state)
     end  
+  end
+
+
+  def wait_until_ready(views, ok_count) do
+    receive do 
+        {sender, :ready} -> 
+            ok_count = ok_count + 1
+            IO.puts("Received :ready from #{sender} and ok_count is #{ok_count}")
+            if(ok_count == length(views)) do 
+              IO.puts("Have received from all the nodes")
+              :ready_all
+            else
+              wait_until_ready(views, ok_count)
+            end
+    end
+  end
+
+  def broadcast_to_nodes(state, message) do  
+    state.view
+    |> Enum.map(fn pid -> send(pid, message) end)
+  end
+
+  def wait_node_setup(state, r_count, res) do 
+    # Wait till the client gets :ready message from all the nodes. Once done, broadcast :ready_all to all the nodes 
+    # so that the nodes can proceed 
+    ok_count = 0
+    status = wait_until_ready(state.view, ok_count)
+    if status == :ready_all do
+      broadcast_to_nodes(state, :ready_all)
+      :ok
+    else
+      :notok
+    end
+  end
+
+
+  def listen_res(state, r_count, n_count, res) do 
+    receive do
+      {sender, {g, h, pi}} -> 
+        IO.puts("g is #{g}, h is #{h} and pi is #{pi}")
+        status = verify(state, g, h, pi)
+        IO.puts("result is #{status}")
+        IO.puts("In client receive, round is #{r_count}, h is #{h} and proof is #{pi}")
+        if status == false do 
+          listen_res(state, r_count, n_count, res) #keep listening for more replies
+        else
+          n_count = n_count + 1
+          if n_count == length(state.view) do # Wait till you receive "valid" numbers from all the nodes (alt. wait till you receive from majority)
+            res = Map.put(res, r_count, h)
+            r_count = r_count + 1
+            if r_count == state.count_r do
+              # return the result
+              res
+            else
+              # reset n_count for the next round
+              listen_res(state, r_count, 0, res)
+            end
+          else # havent received entries from all the nodes yet for round r_count
+            listen_res(state, r_count, n_count, res)
+          end
+        end
+    end
+  end
+
+
+  def become_client(view, lambda, time, count, test) do
+    state = setup_client(view, lambda, time, count, test)
+    send(test, state)
+    res = %{} #store the random numbers generated
+    r_count = 0
+    status = wait_node_setup(state, r_count, res)
+    if status == :ok do
+      n_count = 0
+      res = listen_res(state, r_count, n_count, res)
+      send(state.tester, res)
+    end
   end
 
 end
 
-  defmodule Vdf.Client do 
-    import Emulation, only: [send: 2]
-
-    import Kernel,
-    except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
-    
-    alias __MODULE__
-    
-
-    defstruct(
-      view: nil,
-      tester: nil,
-      count: nil
-    )
-
-    def setup_client(caller, r, views) do
-      %Client{
-        view: views,
-        tester: caller,
-        count: r
-      }
-    end
-
-    def wait_until_ready(views, ok_count) do
-      receive do 
-          {sender, :ready} -> 
-              ok_count = ok_count + 1
-              IO.puts("Received :ready from #{sender} and ok_count is #{ok_count}")
-              if(ok_count == length(views)) do 
-                IO.puts("Have received from all the nodes")
-                :ready_all
-              else
-                wait_until_ready(views, ok_count)
-              end
-      end
-    end
-
-    def broadcast_to_nodes(client, message) do  
-      client.view
-      |> Enum.map(fn pid -> send(pid, message) end)
-    end
-
-    def listen_res(client, r_count) do 
-      # Wait till the client gets :ready message from all the nodes. Once done, broadcast :ready_all to all the nodes 
-      # so that the nodes can proceed 
-      ok_count = 0
-      status = wait_until_ready(client.view, ok_count)
-      if status == :ready_all do
-        broadcast_to_nodes(client, :ready_all)
-      end
-
-      receive do
-        {sender, {rnum, status}} -> 
-          IO.puts("In client receive, rnum is #{rnum} and status is #{status}")
-          if status == false do 
-            listen_res(client, r_count)
-          else
-            send(client.tester, {rnum, status})
-            r_count = r_count - 1
-            if r_count != 0 do 
-              listen_res(client, r_count)
-            end
-          end
-      end
-    end
-
-    def become_client(client) do
-      IO.puts("Client started: #{inspect(client)}")
-      r_count = client.count
-      listen_res(client, r_count)
-    end
-
-  end
+  
