@@ -32,6 +32,8 @@ defmodule Dvrf do
     view_id: nil,
     # Subshare from each node
     view_subshare: nil,
+    # Subsign from each node
+    view_subsign: nil,
     # Individual share used to make signatures for DRB
     share: nil,
     # Max number of rounds for DRB
@@ -62,6 +64,7 @@ defmodule Dvrf do
       ) do
     view_id = Enum.with_index(view, 1) |> Map.new()
     view_subshare = Enum.map(view, fn a -> {a, nil} end) |> Map.new()
+    view_subsign = Enum.map(view, fn a -> {a, nil} end) |> Map.new()
     %Dvrf{
       t: t,
       n: n,
@@ -70,6 +73,7 @@ defmodule Dvrf do
       view: view,
       view_id: view_id,
       view_subshare: view_subshare,
+      view_subsign: view_subsign,
       round_max: round_max,
       round_current: 0,
       last_output: last_output,
@@ -82,6 +86,7 @@ defmodule Dvrf do
     get_generator(p, 2)
   end
 
+  # Algorithm 4.86 from http://cacr.uwaterloo.ca/hac/about/chap4.pdf
   defp get_generator(p, x) do
     cond do
       # trunc() converts float to integer
@@ -101,11 +106,11 @@ defmodule Dvrf do
     state.view
     |> Enum.filter(fn pid -> pid != whoami() end)
     |> Enum.map(fn pid ->
-        id = Map.get(state.view_id, pid)
-        subshare = get_subshare(coeff, id, state.p)
-        msg = {subshare, comm}
-        send(pid, msg)
-      end)
+         id = Map.get(state.view_id, pid)
+         subshare = get_subshare(coeff, id, state.p)
+         msg = {subshare, comm}
+         send(pid, msg)
+       end)
 
     # Calculate my subshare and update state
     id_me = Map.get(state.view_id, whoami())
@@ -180,13 +185,38 @@ defmodule Dvrf do
   end
 
   def drb_next_round(state) do
-    # TODO: Send subsign and NIZK for the next DRB round
     state = %{state | round_current: state.round_current + 1}
-    # Sign message = (previous random || round_current)
-    # Make NIZK that the message was signed with secret key = polynomial share from previous
-    # Broadcast (subsign, nizk)
-    # Record my subsign + need to add an entry to defstruct?
-    drb(state, 1)
+    cond do
+      state.round_current > state.round_max ->
+        IO.puts "Successfully completed by #{inspect(whoami())}"
+      true ->
+        msg = ["#{state.last_output}", "#{state.round_current}"]
+        hash = :crypto.hash(:sha256, msg) |> :binary.decode_unsigned |> :maths.mod(state.p)
+        subsign = :maths.mod_exp(hash, state.share, state.p)
+        comm_to_share = :maths.mod_exp(state.g, state.share, state.p)
+        nizk = get_nizk(state.g, comm_to_share, hash, subsign, state.p)
+        # Some of the inputs to NIZK are kindly provided by the sender for convenience
+        # although all of them can be publicly computed anyways
+        nizk_msg = {nizk, comm_to_share, hash}
+        msg = {subsign, nizk_msg}
+
+        # Broadcasting (subsign, nizk_msg)
+        state.view
+        |> Enum.filter(fn pid -> pid != whoami() end)
+        |> Enum.map(fn pid -> send(pid, msg) end)
+
+        # Initialize subsignatures for all nodes (before we start a new round)
+        # and update state by saving my subsignature first
+        view_subsign = Enum.map(state.view, fn a -> {a, nil} end) |> Map.new()
+        state = %{state | view_subsign: view_subsign}
+        state = %{state | view_subsign: Map.put(state.view_subsign, whoami(), subsign)}
+        drb(state, 1)
+    end
+  end
+
+  def get_nizk(g1, h1, g2, h2, p) do
+    # TODO: output NIZK
+    1
   end
 
   # Counter counts how many subsignatures one has received so far (need t)
