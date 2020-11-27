@@ -24,13 +24,13 @@ defmodule Dvrf do
     n: nil,
     # Group generator
     g: nil,
-    # Prime number
+    # Prime number (must be a safe prime: https://en.wikipedia.org/wiki/Safe_and_Sophie_Germain_primes)
     p: nil,
     # List of pids
     view: nil,
     # List of pids and ids
     view_id: nil,
-    # Subshare and commitment vector from each node
+    # Subshare from each node
     view_subshare: nil,
     # Individual share used to make signatures for DRB
     share: nil,
@@ -77,9 +77,19 @@ defmodule Dvrf do
     }
   end
 
+  # Generator (primitive root) of Z_p where p is a safe prime
   def get_generator(p) do
-    # TODO: Return a group generator for Z_p
-    2
+    get_generator(p, 2)
+  end
+
+  defp get_generator(p, x) do
+    cond do
+      # trunc() converts float to integer
+      :maths.mod_exp(x, 2, p) != 1 && :maths.mod_exp(x, trunc((p - 1) / 2), p) != 1 ->
+        x
+      true ->
+        get_generator(p, x + 1)
+    end
   end
 
   def get_poly_then_send(state) do
@@ -100,22 +110,20 @@ defmodule Dvrf do
     # Calculate my subshare and update state
     id_me = Map.get(state.view_id, whoami())
     subshare_me = get_subshare(coeff, id_me, state.p)
-    new = [subshare_me, comm]
-    state = %{state | view_subshare: Map.put(state.view_subshare, whoami(), new)}
+    state = %{state | view_subshare: Map.put(state.view_subshare, whoami(), subshare_me)}
     state
   end
 
   # We commit to coefficients by raising g (group generator) to the power of each coefficient
-  # TODO: Optimizing modular exponentiation
   def get_comm(coeff, g, p) do
-    # trunc() turns float into integer
-    Enum.map(coeff, fn x -> rem(trunc(:math.pow(g, x)), p) end)
+    # :maths belongs to ndpar library
+    Enum.map(coeff, fn x -> :maths.mod_exp(g, x, p) end)
   end
 
   # Horner's method for polynomial evaluation (at id)
   def get_subshare(coeff, id, p) do
     res = Enum.reduce(Enum.reverse(coeff), 0, fn x, acc -> x + acc * id end)
-    res = rem(res, p)
+    res = :maths.mod(res, p)
     res
   end
 
@@ -149,8 +157,7 @@ defmodule Dvrf do
             # We should not end up here due to our QUAL assumption from the outset
             raise "QUAL assumption violated"
           true ->
-            new = [subshare, comm]
-            state = %{state | view_subshare: Map.put(state.view_subshare, sender, new)}
+            state = %{state | view_subshare: Map.put(state.view_subshare, sender, subshare)}
             counter = counter + 1
             cond do
               # Need to wait for more subshares
@@ -158,8 +165,8 @@ defmodule Dvrf do
                 dkg(state, counter)
               # Can make a share out of all subshares received
               true ->
-                subshares = Enum.map(Map.values(state.view_subshare), fn l -> hd(l) end)
-                share = rem(Enum.sum(subshares), state.p)
+                subshares = Map.values(state.view_subshare)
+                share = :maths.mod(Enum.sum(subshares), state.p)
                 state = %{state | share: share}
                 drb_next_round(state)
             end

@@ -12,7 +12,8 @@ defmodule DvrfTest do
 
     t = 6
     n = 10
-    p = 211
+    # Sample list of safe primes: [5, 7, 11, 23, 47, 59, 83, 107, 167, 179, 227, 263, 347, 359, 383, 467, 479, 503, 563, 587, 719, 839, 863, 887, 983, 1019, 1187, 1283, 1307, 1319, 1367, 1439, 1487, 1523, 1619, 1823, 1907]
+    p = 1019
     view = [:p1, :p2, :p3, :p4, :p5, :p6, :p7, :p8, :p9, :p10]
     base_config =
       Dvrf.new_configuration(t, n, Dvrf.get_generator(p), p, view, 100, "DVRF-DRB")
