@@ -217,6 +217,10 @@ defmodule Dvrf do
   end
 
   # Anyone can non-interactively verify NIZK by definition
+  # Note: In a public bulletin model, one would be able to verify
+  # a NIZK without `state` (which only the participants to the DRB
+  # have access to in this implementation), as parameters (e.g. p, q, and g)
+  # would be available for anyone (including bystanders).
   def verify_nizk(subsign, nizk_msg, state) do
     {nizk, comm_to_share, hash} = nizk_msg
     {a1, a2, r} = nizk
@@ -227,7 +231,6 @@ defmodule Dvrf do
     c = :crypto.hash(:sha224, params) |> :binary.decode_unsigned |> :maths.mod(q)
     rhs1 = :maths.mod_exp(state.g, r, p) * :maths.mod_exp(comm_to_share, c, p) |> :maths.mod(p)
     rhs2 = :maths.mod_exp(hash, r, p) * :maths.mod_exp(subsign, c, p) |> :maths.mod(p)
-    # IO.puts "NIZK #{inspect(lhs1 == rhs1)} #{inspect(lhs2 == rhs2)}"
     lhs1 == rhs1 && lhs2 == rhs2
   end
 
@@ -253,7 +256,7 @@ defmodule Dvrf do
     # We work with modulo q (not p) when dealing with exponents
     Enum.filter(lambda_set, fn x -> x != i end)
     |> Enum.map(fn j ->
-         # Below cond do is b/c :maths.mod_inv() cannot deal with negative numbers
+         # Below `cond do` is b/c :maths.mod_inv() cannot deal with negative numbers
          cond do
            j / (j - i) < 0 ->
              # Can't perform :maths.mod_inv() if q is not prime
