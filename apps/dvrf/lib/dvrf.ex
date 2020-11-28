@@ -36,7 +36,7 @@ defmodule Dvrf do
     view_subshare: nil,
     # Subsign from each node
     view_subsign: nil,
-    # Individual share used to make signatures for DRB
+    # Individual share used to make subsignatures for DRB
     share: nil,
     # Max number of rounds for DRB
     round_max: nil,
@@ -103,6 +103,7 @@ defmodule Dvrf do
     end
   end
 
+  # We start n parallel instances of VSS (verifiable secret sharing)
   def get_poly_then_send(state) do
     # Generate t number of random coefficients in (Z_p)*
     coeff = Enum.map(1..state.t, fn _ -> :rand.uniform(state.p - 1) end)
@@ -196,6 +197,13 @@ defmodule Dvrf do
     end
   end
 
+  # Note (Chaum-Pedersen NIZK): We show via zero-knowledge that
+  # the two discrete logs -- log of h1 with base g1 and log of h2
+  # with base g2 -- are equal. In particular, the exact value of
+  # the discrete log is in fact equal to a node's secret share,
+  # which the node used to "sign" DRB's round message to generate
+  # a subsignature. Hence, this NIZK proves the connection between
+  # the previous DKG and the ongoing DRB.
   def get_nizk(g1, h1, g2, h2, p, q, share) do
     w = :rand.uniform(q)
     a1 = :maths.mod_exp(g1, w, p)
@@ -208,6 +216,7 @@ defmodule Dvrf do
     {a1, a2, r}
   end
 
+  # Anyone can non-interactively verify NIZK by definition
   def verify_nizk(subsign, nizk_msg, state) do
     {nizk, comm_to_share, hash} = nizk_msg
     {a1, a2, r} = nizk
@@ -244,6 +253,7 @@ defmodule Dvrf do
     # We work with modulo q (not p) when dealing with exponents
     Enum.filter(lambda_set, fn x -> x != i end)
     |> Enum.map(fn j ->
+         # Below cond do is b/c :maths.mod_inv() cannot deal with negative numbers
          cond do
            j / (j - i) < 0 ->
              # Can't perform :maths.mod_inv() if q is not prime
@@ -261,11 +271,14 @@ defmodule Dvrf do
   # Below is DRB
 
   # Transitioning into the next round of DRB
+  # Scenario: drb_next_round() -> drb() -> drb_next_round() -> drb() -> ...
   def drb_next_round(state) do
     state = %{state | round_current: state.round_current + 1}
     cond do
+      # Successful completion of DRB
       state.round_current > state.round_max ->
         IO.puts "Successfully completed by #{inspect(whoami())}"
+      # Ongoing DRB
       true ->
         msg = ["#{state.last_output}", "#{state.round_current}"]
         # We want hash to be part of Z_q subgroup of (Z_p)*
@@ -293,27 +306,33 @@ defmodule Dvrf do
     end
   end
 
+  # Distributed randomness beacon
   # Counter counts how many subsignatures one has received so far (need t)
   def drb(state, counter) do
     receive do
       {sender, {subsign, nizk_msg, round}} ->
         cond do
+          # Can ignore message from a previous round
           state.round_current != round ->
-            # IO.puts "Wrong round number (previous subsign received?)"
             drb(state, counter)
+          # Check if NIZK returns true
           verify_nizk(subsign, nizk_msg, state) == false ->
             IO.puts "Invalid NIZK"
             drb(state, counter)
+          # Correct round and NIZK
           true ->
             state = %{state | view_subsign: Map.put(state.view_subsign, sender, subsign)}
             counter = counter + 1
             cond do
+              # Need to wait for at least t number of subsignatures
               counter < state.t ->
                 drb(state, counter)
+              # Can make a signature (= round output) out of t subsignatures received
               true ->
                 subsigns = Map.to_list(state.view_subsign)
                            |> Enum.filter(fn x -> elem(x, 1) != nil end)
                            |> Enum.map(fn x -> {Map.get(state.view_id, elem(x, 0)), elem(x, 1)} end)
+                # Lagrange interpolation
                 sign = get_sign(subsigns, state.p, state.q)
                 state = %{state | last_output: sign}
                 IO.puts "Output for round #{inspect(round)} is #{inspect(sign)} by #{inspect(whoami())}"
