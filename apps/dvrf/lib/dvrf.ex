@@ -22,10 +22,12 @@ defmodule Dvrf do
     t: nil,
     # Number of participants
     n: nil,
-    # Group generator
+    # Group generator of Z_q where q is prime
     g: nil,
     # Prime number (must be a safe prime: https://en.wikipedia.org/wiki/Safe_and_Sophie_Germain_primes)
     p: nil,
+    # Prime number equal to (p - 1) / 2
+    q: nil,
     # List of pids
     view: nil,
     # List of pids and ids
@@ -62,6 +64,7 @@ defmodule Dvrf do
         round_max,
         last_output
       ) do
+    q = trunc((p - 1) / 2)
     view_id = Enum.with_index(view, 1) |> Map.new()
     view_subshare = Enum.map(view, fn a -> {a, nil} end) |> Map.new()
     view_subsign = Enum.map(view, fn a -> {a, nil} end) |> Map.new()
@@ -70,6 +73,7 @@ defmodule Dvrf do
       n: n,
       g: g,
       p: p,
+      q: q,
       view: view,
       view_id: view_id,
       view_subshare: view_subshare,
@@ -81,7 +85,7 @@ defmodule Dvrf do
     }
   end
 
-  # Generator (primitive root) of Z_p where p is a safe prime
+  # Generator (primitive root) of Z_q where q is a prime number equal to (p - 1) / 2
   def get_generator(p) do
     get_generator(p, 2)
   end
@@ -89,16 +93,18 @@ defmodule Dvrf do
   # Algorithm 4.86 from http://cacr.uwaterloo.ca/hac/about/chap4.pdf
   defp get_generator(p, x) do
     cond do
-      # trunc() converts float to integer
+      # Find a generator of (Z_p)* first
+      # then square it to get a generator of Z_q
       :maths.mod_exp(x, 2, p) != 1 && :maths.mod_exp(x, trunc((p - 1) / 2), p) != 1 ->
-        x
+        IO.puts "Generator: #{inspect(:maths.mod_exp(x, 2, p))}"
+        :maths.mod_exp(x, 2, p)
       true ->
         get_generator(p, x + 1)
     end
   end
 
   def get_poly_then_send(state) do
-    # Generate t number of random coefficients in Z_p
+    # Generate t number of random coefficients in (Z_p)*
     coeff = Enum.map(1..state.t, fn _ -> :rand.uniform(state.p - 1) end)
     comm = get_comm(coeff, state.g, state.p)
 
@@ -107,14 +113,14 @@ defmodule Dvrf do
     |> Enum.filter(fn pid -> pid != whoami() end)
     |> Enum.map(fn pid ->
          id = Map.get(state.view_id, pid)
-         subshare = get_subshare(coeff, id, state.p)
+         subshare = get_subshare(coeff, id)
          msg = {subshare, comm}
          send(pid, msg)
        end)
 
     # Calculate my subshare and update state
     id_me = Map.get(state.view_id, whoami())
-    subshare_me = get_subshare(coeff, id_me, state.p)
+    subshare_me = get_subshare(coeff, id_me)
     state = %{state | view_subshare: Map.put(state.view_subshare, whoami(), subshare_me)}
     state
   end
@@ -126,11 +132,21 @@ defmodule Dvrf do
   end
 
   # Horner's method for polynomial evaluation (at id)
-  def get_subshare(coeff, id, p) do
-    res = Enum.reduce(Enum.reverse(coeff), 0, fn x, acc -> x + acc * id end)
-    res = :maths.mod(res, p)
-    res
+  def get_subshare(coeff, id) do
+    Enum.reduce(Enum.reverse(coeff), 0, fn x, acc -> x + acc * id end)
   end
+
+  # Verify a subshare as per VSS (verifiable secret sharing)
+  def verify_subshare(subshare, comm, g, p, id) do
+    lhs = :maths.mod_exp(g, subshare, p)
+    rhs = Enum.with_index(comm)
+    rhs = Enum.map(rhs, fn t -> :maths.mod_exp(elem(t, 0), :maths.pow(id, elem(t, 1)), p) end)
+    rhs = Enum.reduce(rhs, fn x, acc -> :maths.mod(x * acc, p) end)
+    lhs == rhs
+  end
+
+  # Above are utility functions before DKG
+  # Below is DKG
 
   # Distributed key generation
   def dkg(state) do
@@ -138,7 +154,7 @@ defmodule Dvrf do
   end
 
   # Counter counts how many subshares one has received so far (need n)
-  # QUAL assumption: In the literature, the usual assumption is that some nodes could be
+  # Note (QUAL assumption): In the literature, the usual assumption is that some nodes could be
   # unresponsive/faulty/Byzantine in the DKG phase (pre-DRB phase), in which case
   # nodes first need to agree on a group of qualified nodes (denoted by QUAL) during DKG.
   # Here, we assume that all initialized nodes are honest and fully functional
@@ -171,19 +187,64 @@ defmodule Dvrf do
               # Can make a share out of all subshares received
               true ->
                 subshares = Map.values(state.view_subshare)
-                share = :maths.mod(Enum.sum(subshares), state.p)
+                share = Enum.sum(subshares)
                 state = %{state | share: share}
+                IO.puts "Process #{inspect(whoami())} exits DKG, share is #{inspect(state.share)}"
                 drb_next_round(state)
             end
         end
     end
   end
 
-  def verify_subshare(subshare, comm, g, p, id) do
-    # TODO: VSS verification
+  def get_nizk(g1, h1, g2, h2, p) do
+    # TODO: output NIZK
+    1
+  end
+
+  def verify_nizk(subsign, nizk, comm_to_share, hash) do
+    # TODO: verify NIZK
     true
   end
 
+  # Lagrange interpolation from t number of subsignatures
+  # Note: We make use of a pleasantly surprising fact that we would end up
+  # with the same output regardless of which t number of subsignatures we get.
+  def get_sign(subsigns, p, q) do
+    lambda_set = Enum.map(subsigns, fn x -> elem(x, 0) end)
+    # IO.puts "lambda_set is #{inspect(lambda_set)} by #{inspect(whoami())}"
+    Enum.map(subsigns, fn x ->
+      subsign = elem(x, 1)
+      lambda = get_lambda(lambda_set, elem(x, 0), q)
+      :maths.mod_exp(subsign, lambda, p)
+    end)
+    |> Enum.reduce(fn x, acc -> :maths.mod(x * acc, p) end)
+  end
+
+  # Lagrange interpolation constants
+  # Note: This is the main reason why we use q from a safe prime.
+  # Congruency modulo q on the exponent yields congruency modulo p
+  # on the base. Hence, we chose a safe prime.
+  def get_lambda(lambda_set, i, q) do
+    # We work with modulo q (not p) when dealing with exponents
+    Enum.filter(lambda_set, fn x -> x != i end)
+    |> Enum.map(fn j ->
+         cond do
+           j / (j - i) < 0 ->
+             # Can't perform :maths.mod_inv() if q is not prime
+             :maths.mod(-j, q) * :maths.mod_inv(i - j, q)
+           j / (j - i) > 0 ->
+             :maths.mod(j, q) * :maths.mod_inv(j - i, q)
+           true ->
+             raise "Should not get any zero when calculating lambda"
+         end
+       end)
+    |> Enum.reduce(fn x, acc -> :maths.mod(x * acc, q) end)
+  end
+
+  # Above are utility functions before DRB
+  # Below is DRB
+
+  # Transitioning into the next round of DRB
   def drb_next_round(state) do
     state = %{state | round_current: state.round_current + 1}
     cond do
@@ -191,14 +252,16 @@ defmodule Dvrf do
         IO.puts "Successfully completed by #{inspect(whoami())}"
       true ->
         msg = ["#{state.last_output}", "#{state.round_current}"]
-        hash = :crypto.hash(:sha256, msg) |> :binary.decode_unsigned |> :maths.mod(state.p)
+        # We want hash to be part of Z_q subgroup of (Z_p)*
+        hash = :crypto.hash(:sha256, msg) |> :binary.decode_unsigned |> :maths.mod(state.q)
+        hash = :maths.mod_exp(state.g, hash, state.p)
         subsign = :maths.mod_exp(hash, state.share, state.p)
         comm_to_share = :maths.mod_exp(state.g, state.share, state.p)
         nizk = get_nizk(state.g, comm_to_share, hash, subsign, state.p)
         # Some of the inputs to NIZK are kindly provided by the sender for convenience
         # although all of them can be publicly computed anyways
         nizk_msg = {nizk, comm_to_share, hash}
-        msg = {subsign, nizk_msg}
+        msg = {subsign, nizk_msg, state.round_current}
 
         # Broadcasting (subsign, nizk_msg)
         state.view
@@ -214,16 +277,34 @@ defmodule Dvrf do
     end
   end
 
-  def get_nizk(g1, h1, g2, h2, p) do
-    # TODO: output NIZK
-    1
-  end
-
   # Counter counts how many subsignatures one has received so far (need t)
-  defp drb(state, counter) do
-    # TODO: Listen mode for DRB
-    # receive do
-    # end
-    IO.puts "Process #{inspect(whoami())} got to DRB phase, share is #{inspect(state.share)}"
+  def drb(state, counter) do
+    receive do
+      {sender, {subsign, nizk_msg, round}} ->
+        {nizk, comm_to_share, hash} = nizk_msg
+        cond do
+          state.round_current != round ->
+            # IO.puts "Wrong round number (previous subsign received?)"
+            drb(state, counter)
+          verify_nizk(subsign, nizk, comm_to_share, hash) == false ->
+            IO.puts "Invalid NIZK"
+            drb(state, counter)
+          true ->
+            state = %{state | view_subsign: Map.put(state.view_subsign, sender, subsign)}
+            counter = counter + 1
+            cond do
+              counter < state.t ->
+                drb(state, counter)
+              true ->
+                subsigns = Map.to_list(state.view_subsign)
+                           |> Enum.filter(fn x -> elem(x, 1) != nil end)
+                           |> Enum.map(fn x -> {Map.get(state.view_id, elem(x, 0)), elem(x, 1)} end)
+                sign = get_sign(subsigns, state.p, state.q)
+                state = %{state | last_output: sign}
+                IO.puts "Output for round #{inspect(round)} is #{inspect(sign)} by #{inspect(whoami())}"
+                drb_next_round(state)
+            end
+        end
+    end
   end
 end
