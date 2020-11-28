@@ -16,7 +16,7 @@ defmodule DvrfTest do
     p = 1019
     view = [:p1, :p2, :p3, :p4, :p5, :p6, :p7, :p8, :p9, :p10]
     base_config =
-      Dvrf.new_configuration(t, n, Dvrf.get_generator(p), p, view, 10, "DVRF-DRB")
+      Dvrf.new_configuration(t, n, Dvrf.get_generator(p), p, view, 100, "DVRF-DRB")
 
     spawn(:p1, fn -> Dvrf.dkg(base_config) end)
     spawn(:p2, fn -> Dvrf.dkg(base_config) end)

@@ -196,14 +196,30 @@ defmodule Dvrf do
     end
   end
 
-  def get_nizk(g1, h1, g2, h2, p) do
-    # TODO: output NIZK
-    1
+  def get_nizk(g1, h1, g2, h2, p, q, share) do
+    w = :rand.uniform(q)
+    a1 = :maths.mod_exp(g1, w, p)
+    a2 = :maths.mod_exp(g2, w, p)
+    params = ["#{h1}", "#{h2}", "#{a1}", "#{a2}"]
+    # Fiat-Shamir heuristic
+    # A different hash function used just for NIZK purposes
+    c = :crypto.hash(:sha224, params) |> :binary.decode_unsigned |> :maths.mod(q)
+    r = :maths.mod(w - share * c, q)
+    {a1, a2, r}
   end
 
-  def verify_nizk(subsign, nizk, comm_to_share, hash) do
-    # TODO: verify NIZK
-    true
+  def verify_nizk(subsign, nizk_msg, state) do
+    {nizk, comm_to_share, hash} = nizk_msg
+    {a1, a2, r} = nizk
+    {p, q} = {state.p, state.q}
+    lhs1 = a1
+    lhs2 = a2
+    params = ["#{comm_to_share}", "#{subsign}", "#{a1}", "#{a2}"]
+    c = :crypto.hash(:sha224, params) |> :binary.decode_unsigned |> :maths.mod(q)
+    rhs1 = :maths.mod_exp(state.g, r, p) * :maths.mod_exp(comm_to_share, c, p) |> :maths.mod(p)
+    rhs2 = :maths.mod_exp(hash, r, p) * :maths.mod_exp(subsign, c, p) |> :maths.mod(p)
+    # IO.puts "NIZK #{inspect(lhs1 == rhs1)} #{inspect(lhs2 == rhs2)}"
+    lhs1 == rhs1 && lhs2 == rhs2
   end
 
   # Lagrange interpolation from t number of subsignatures
@@ -257,7 +273,7 @@ defmodule Dvrf do
         hash = :maths.mod_exp(state.g, hash, state.p)
         subsign = :maths.mod_exp(hash, state.share, state.p)
         comm_to_share = :maths.mod_exp(state.g, state.share, state.p)
-        nizk = get_nizk(state.g, comm_to_share, hash, subsign, state.p)
+        nizk = get_nizk(state.g, comm_to_share, hash, subsign, state.p, state.q, state.share)
         # Some of the inputs to NIZK are kindly provided by the sender for convenience
         # although all of them can be publicly computed anyways
         nizk_msg = {nizk, comm_to_share, hash}
@@ -281,12 +297,11 @@ defmodule Dvrf do
   def drb(state, counter) do
     receive do
       {sender, {subsign, nizk_msg, round}} ->
-        {nizk, comm_to_share, hash} = nizk_msg
         cond do
           state.round_current != round ->
             # IO.puts "Wrong round number (previous subsign received?)"
             drb(state, counter)
-          verify_nizk(subsign, nizk, comm_to_share, hash) == false ->
+          verify_nizk(subsign, nizk_msg, state) == false ->
             IO.puts "Invalid NIZK"
             drb(state, counter)
           true ->
