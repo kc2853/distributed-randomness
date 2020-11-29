@@ -47,7 +47,9 @@ defmodule Dvrf do
     # Replier replies to client with each round's random number (for demonstration purposes)
     replier: nil,
     # Client receiving the sequence of random numbers (for demonstration purposes)
-    client: nil
+    client: nil,
+    # Byzantine nodes (for demonstration purposes)
+    byzantine: nil
   )
 
   @doc """
@@ -85,6 +87,7 @@ defmodule Dvrf do
       round_current: 0,
       last_output: last_output,
       replier: false,
+      byzantine: false
     }
   end
 
@@ -171,11 +174,24 @@ defmodule Dvrf do
         IO.puts "#{inspect(whoami())} Received :dkg"
         state = %{state | client: sender}
         state = get_poly_then_send(state)
-        dkg(state, counter + 1)
+        counter = counter + 1
+        cond do
+          # This can happen if the network is highly unstable such that the :dkg message
+          # from the client reaches a node last (compared to subshare messages)
+          counter == state.n ->
+            subshares = Map.values(state.view_subshare)
+            share = Enum.sum(subshares)
+            state = %{state | share: share}
+            IO.puts "#{inspect(whoami())} Exits DKG due to #{inspect(sender)}, share is #{inspect(state.share)}"
+            drb_next_round(state)
+          # Normal cases
+          true ->
+            dkg(state, counter)
+        end
 
       # Listen mode for subshares
       {sender, {subshare, comm}} ->
-        IO.puts "#{inspect(whoami())} Received subshare from #{inspect(sender)}"
+        # IO.puts "#{inspect(whoami())} Received subshare from #{inspect(sender)}"
         id_me = Map.get(state.view_id, whoami())
         case verify_subshare(subshare, comm, state.g, state.p, id_me) do
           false ->
@@ -193,7 +209,7 @@ defmodule Dvrf do
                 subshares = Map.values(state.view_subshare)
                 share = Enum.sum(subshares)
                 state = %{state | share: share}
-                IO.puts "#{inspect(whoami())} Exits DKG, share is #{inspect(state.share)}"
+                IO.puts "#{inspect(whoami())} Exits DKG due to #{inspect(sender)}, share is #{inspect(state.share)}"
                 drb_next_round(state)
             end
         end
@@ -242,7 +258,6 @@ defmodule Dvrf do
   # with the same output regardless of which t number of subsignatures we get.
   def get_sign(subsigns, p, q) do
     lambda_set = Enum.map(subsigns, fn x -> elem(x, 0) end)
-    # IO.puts "#{inspect(whoami())} lambda_set is #{inspect(lambda_set)}"
     Enum.map(subsigns, fn x ->
       subsign = elem(x, 1)
       lambda = get_lambda(lambda_set, elem(x, 0), q)
@@ -305,9 +320,22 @@ defmodule Dvrf do
         msg = {subsign, nizk_msg, state.round_current}
 
         # Broadcasting (subsign, nizk_msg)
-        state.view
-        |> Enum.filter(fn pid -> pid != whoami() end)
-        |> Enum.map(fn pid -> send(pid, msg) end)
+        cond do
+          # Broadcasting invalid subsignature and NIZK if Byzantine
+          state.byzantine == true ->
+            {p, q} = {state.p, state.q}
+            nizk_byzantine = {:rand.uniform(p - 1), :rand.uniform(p - 1), :rand.uniform(q)}
+            nizk_msg_byzantine = {nizk_byzantine, :rand.uniform(p - 1), :rand.uniform(p - 1)}
+            msg_byzantine = {:rand.uniform(p - 1), nizk_msg_byzantine, state.round_current}
+            state.view
+            |> Enum.filter(fn pid -> pid != whoami() end)
+            |> Enum.map(fn pid -> send(pid, msg_byzantine) end)
+          # Honest broadcast
+          state.byzantine == false ->
+            state.view
+            |> Enum.filter(fn pid -> pid != whoami() end)
+            |> Enum.map(fn pid -> send(pid, msg) end)
+        end
 
         # Update state by recording my new subsignature
         new = get_updated_view_subsign(state.view_subsign, state.round_current, whoami(), subsign)
@@ -338,7 +366,7 @@ defmodule Dvrf do
             drb(state, counter)
           # Check if NIZK returns true
           verify_nizk(subsign, nizk_msg, state) == false ->
-            IO.puts "#{inspect(whoami())} Invalid NIZK"
+            # IO.puts "#{inspect(whoami())} Invalid NIZK"
             drb(state, counter)
           # Message from a future round
           round > state.round_current ->
