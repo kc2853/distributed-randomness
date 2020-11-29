@@ -1,12 +1,12 @@
 defmodule DvrfTest do
   use ExUnit.Case
   doctest Dvrf
-  import Emulation, only: [spawn: 2, send: 2]
+  import Emulation, only: [spawn: 2, send: 2, whoami: 0]
 
   import Kernel,
     except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
 
-  test "Nothing crashes during setup" do
+  test "Nothing crashes during DKG setup" do
     Emulation.init()
     Emulation.append_fuzzers([Fuzzers.delay(2)])
 
@@ -15,8 +15,10 @@ defmodule DvrfTest do
     # Sample list of safe primes: [5, 7, 11, 23, 47, 59, 83, 107, 167, 179, 227, 263, 347, 359, 383, 467, 479, 503, 563, 587, 719, 839, 863, 887, 983, 1019, 1187, 1283, 1307, 1319, 1367, 1439, 1487, 1523, 1619, 1823, 1907]
     p = 1019
     view = [:p1, :p2, :p3, :p4, :p5, :p6, :p7, :p8, :p9, :p10]
+    # Setting the following to 0 to check if DKG works first of all
+    round_max = 0
     base_config =
-      Dvrf.new_configuration(t, n, Dvrf.get_generator(p), p, view, 100, "DVRF-DRB")
+      Dvrf.new_configuration(t, n, Dvrf.get_generator(p), p, view, round_max, "DVRF-DRB")
 
     spawn(:p1, fn -> Dvrf.dkg(base_config) end)
     spawn(:p2, fn -> Dvrf.dkg(base_config) end)
@@ -35,7 +37,7 @@ defmodule DvrfTest do
 
         receive do
         after
-          5_000 -> true
+          3_000 -> true
         end
       end)
 
@@ -50,134 +52,107 @@ defmodule DvrfTest do
     Emulation.terminate()
   end
 
-  # test "RSM operations work" do
-  #   Emulation.init()
-  #   Emulation.append_fuzzers([Fuzzers.delay(2)])
+  # Client listens to and logs each DRB round's output
+  defp client_listen_loop(drb, round_max) do
+    receive do
+      {sender, {round, sign}} ->
+        IO.puts "#{inspect(whoami())} Received round #{inspect(round)}, output #{inspect(sign)}"
+        drb = drb ++ [sign]
+        cond do
+          round == round_max ->
+            IO.puts "#{inspect(whoami())} Final list of outputs #{inspect(drb)}"
+            drb
+          true ->
+            client_listen_loop(drb, round_max)
+        end
+    end
+  end
 
-  #   base_config =
-  #     Raft.new_configuration([:a, :b, :c], :a, 100_000, 100_001, 1000)
+  test "DRB operates as intended when given trivial message delay" do
+    Emulation.init()
+    Emulation.append_fuzzers([Fuzzers.delay(2)])
 
-  #   spawn(:b, fn -> Raft.become_follower(Raft.make_follower(base_config)) end)
-  #   spawn(:c, fn -> Raft.become_follower(Raft.make_follower(base_config)) end)
-  #   spawn(:a, fn -> Raft.become_leader(base_config) end)
+    t = 6
+    n = 10
+    # Sample list of safe primes: [5, 7, 11, 23, 47, 59, 83, 107, 167, 179, 227, 263, 347, 359, 383, 467, 479, 503, 563, 587, 719, 839, 863, 887, 983, 1019, 1187, 1283, 1307, 1319, 1367, 1439, 1487, 1523, 1619, 1823, 1907]
+    p = 1019
+    view = [:p1, :p2, :p3, :p4, :p5, :p6, :p7, :p8, :p9, :p10]
+    round_max = 100
+    base_config =
+      Dvrf.new_configuration(t, n, Dvrf.get_generator(p), p, view, round_max, "DVRF-DRB")
+    replier_config =
+      %{base_config | replier: true}
 
-  #   client =
-  #     spawn(:client, fn ->
-  #       client = Raft.Client.new_client(:c)
-  #       {:ok, client} = Raft.Client.enq(client, 5)
-  #       {{:value, v}, client} = Raft.Client.deq(client)
-  #       assert v == 5
-  #       {v, _} = Raft.Client.deq(client)
-  #       assert v == :empty
-  #     end)
+    spawn(:p1, fn -> Dvrf.dkg(replier_config) end)
+    spawn(:p2, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p3, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p4, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p5, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p6, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p7, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p8, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p9, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p10, fn -> Dvrf.dkg(base_config) end)
 
-  #   handle = Process.monitor(client)
-  #   # Timeout.
-  #   receive do
-  #     {:DOWN, ^handle, _, _, _} -> true
-  #   after
-  #     30_000 -> assert false
-  #   end
-  # after
-  #   Emulation.terminate()
-  # end
+    client =
+      spawn(:client, fn ->
+        Enum.map(view, fn pid -> send(pid, :dkg) end)
+        drb = client_listen_loop([], round_max)
+        assert Enum.count(drb) == round_max
+      end)
 
-  # test "RSM Logs are correctly updated" do
-  #   Emulation.init()
-  #   Emulation.append_fuzzers([Fuzzers.delay(2)])
+    handle = Process.monitor(client)
+    # Timeout.
+    receive do
+      {:DOWN, ^handle, _, _, _} -> true
+    after
+      30_000 -> assert false
+    end
+  after
+    Emulation.terminate()
+  end
 
-  #   base_config =
-  #     Raft.new_configuration([:a, :b, :c], :a, 100_000, 100_001, 1000)
+  test "DRB operates as intended when given nontrivial message delay" do
+    Emulation.init()
+    Emulation.append_fuzzers([Fuzzers.delay(500)])
 
-  #   spawn(:b, fn -> Raft.become_follower(Raft.make_follower(base_config)) end)
-  #   spawn(:c, fn -> Raft.become_follower(Raft.make_follower(base_config)) end)
-  #   spawn(:a, fn -> Raft.become_leader(base_config) end)
+    t = 6
+    n = 10
+    # Sample list of safe primes: [5, 7, 11, 23, 47, 59, 83, 107, 167, 179, 227, 263, 347, 359, 383, 467, 479, 503, 563, 587, 719, 839, 863, 887, 983, 1019, 1187, 1283, 1307, 1319, 1367, 1439, 1487, 1523, 1619, 1823, 1907]
+    p = 1019
+    view = [:p1, :p2, :p3, :p4, :p5, :p6, :p7, :p8, :p9, :p10]
+    round_max = 10
+    base_config =
+      Dvrf.new_configuration(t, n, Dvrf.get_generator(p), p, view, round_max, "DVRF-DRB")
+    replier_config =
+      %{base_config | replier: true}
 
-  #   client =
-  #     spawn(:client, fn ->
-  #       view = [:a, :b, :c]
-  #       client = Raft.Client.new_client(:c)
-  #       # Perform one operation
-  #       {:ok, _} = Raft.Client.enq(client, 5)
-  #       # Now collect logs
-  #       view |> Enum.map(fn x -> send(x, :send_log) end)
+    spawn(:p1, fn -> Dvrf.dkg(replier_config) end)
+    spawn(:p2, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p3, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p4, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p5, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p6, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p7, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p8, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p9, fn -> Dvrf.dkg(base_config) end)
+    spawn(:p10, fn -> Dvrf.dkg(base_config) end)
 
-  #       logs =
-  #         view
-  #         |> Enum.map(fn x ->
-  #           receive do
-  #             {^x, log} -> log
-  #           end
-  #         end)
+    client =
+      spawn(:client, fn ->
+        Enum.map(view, fn pid -> send(pid, :dkg) end)
+        drb = client_listen_loop([], round_max)
+        assert Enum.count(drb) == round_max
+      end)
 
-  #       log_lengths = logs |> Enum.map(&length/1)
-
-  #       assert Enum.count(log_lengths, fn l -> l == 1 end) >= 2 &&
-  #                !Enum.any?(log_lengths, fn l -> l > 1 end)
-  #     end)
-
-  #   handle = Process.monitor(client)
-  #   # Timeout.
-  #   receive do
-  #     {:DOWN, ^handle, _, _, _} -> true
-  #   after
-  #     30_000 -> false
-  #   end
-  # after
-  #   Emulation.terminate()
-  # end
-
-  # test "RSM replicas commit correctly" do
-  #   Emulation.init()
-  #   Emulation.append_fuzzers([Fuzzers.delay(2)])
-
-  #   base_config =
-  #     Raft.new_configuration([:a, :b, :c], :a, 100_000, 100_001, 1000)
-
-  #   spawn(:b, fn -> Raft.become_follower(Raft.make_follower(base_config)) end)
-  #   spawn(:c, fn -> Raft.become_follower(Raft.make_follower(base_config)) end)
-  #   spawn(:a, fn -> Raft.become_leader(base_config) end)
-
-  #   client =
-  #     spawn(:client, fn ->
-  #       view = [:a, :b, :c]
-  #       client = Raft.Client.new_client(:c)
-  #       # Perform one operation
-  #       {:ok, client} = Raft.Client.enq(client, 5)
-  #       # Now use a nop to force a commit.
-  #       {:ok, _} = Raft.Client.nop(client)
-  #       # Now collect queues
-  #       view |> Enum.map(fn x -> send(x, :send_state) end)
-
-  #       queues =
-  #         view
-  #         |> Enum.map(fn x ->
-  #           receive do
-  #             {^x, s} -> s
-  #           end
-  #         end)
-
-  #       q_lengths = queues |> Enum.map(&:queue.len/1)
-
-  #       assert Enum.count(q_lengths, fn l -> l == 1 end) >= 2 &&
-  #                !Enum.any?(q_lengths, fn l -> l > 1 end)
-
-  #       q_values =
-  #         queues
-  #         |> Enum.map(&:queue.out/1)
-  #         |> Enum.map(fn {v, _} -> v end)
-
-  #       assert Enum.all?(q_values, fn l -> l == {:value, 5} || l == :empty end)
-  #     end)
-
-  #   handle = Process.monitor(client)
-  #   # Timeout.
-  #   receive do
-  #     {:DOWN, ^handle, _, _, _} -> true
-  #   after
-  #     30_000 -> false
-  #   end
-  # after
-  #   Emulation.terminate()
-  # end
+    handle = Process.monitor(client)
+    # Timeout.
+    receive do
+      {:DOWN, ^handle, _, _, _} -> true
+    after
+      30_000 -> assert false
+    end
+  after
+    Emulation.terminate()
+  end
 end

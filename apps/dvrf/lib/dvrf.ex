@@ -273,6 +273,7 @@ defmodule Dvrf do
     |> Enum.reduce(fn x, acc -> :maths.mod(x * acc, q) end)
   end
 
+  # Update `view_subsign` for a specific round
   def get_updated_view_subsign(view, round, pid, subsign) do
     res = Map.put(view[round], pid, subsign)
     Map.put(view, round, res)
@@ -287,7 +288,8 @@ defmodule Dvrf do
     cond do
       # Successful completion of DRB
       state.round_current > state.round_max ->
-        IO.puts "#{inspect(whoami())} Successfully completed!"
+        # IO.puts "#{inspect(whoami())} Successfully completed!"
+        nil
       # Ongoing DRB
       true ->
         msg = ["#{state.last_output}", "#{state.round_current}"]
@@ -368,7 +370,14 @@ defmodule Dvrf do
     # Lagrange interpolation
     sign = get_sign(subsigns, state.p, state.q)
     state = %{state | last_output: sign}
-    IO.puts "#{inspect(whoami())} Output for round #{inspect(state.round_current)} is #{inspect(sign)}"
-    drb_next_round(state)
+    # IO.puts "#{inspect(whoami())} Output for round #{inspect(state.round_current)} is #{inspect(sign)}"
+    cond do
+      # Send the randomness beacon output to client (for dev purposes)
+      state.replier == true ->
+        send(state.client, {state.round_current, sign})
+        drb_next_round(state)
+      true ->
+        drb_next_round(state)
+    end
   end
 end
