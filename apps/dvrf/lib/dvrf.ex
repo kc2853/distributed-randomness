@@ -34,7 +34,7 @@ defmodule Dvrf do
     view_id: nil,
     # Subshare from each node
     view_subshare: nil,
-    # Subsign from each node
+    # Subsignature from each node for all rounds
     view_subsign: nil,
     # Individual share used to make subsignatures for DRB
     share: nil,
@@ -67,7 +67,10 @@ defmodule Dvrf do
     q = trunc((p - 1) / 2)
     view_id = Enum.with_index(view, 1) |> Map.new()
     view_subshare = Enum.map(view, fn a -> {a, nil} end) |> Map.new()
-    view_subsign = Enum.map(view, fn a -> {a, nil} end) |> Map.new()
+    view_subsign = 1..round_max |> Enum.map(fn n ->
+                                     {n, Enum.map(view, fn a -> {a, nil} end) |> Map.new()}
+                                   end)
+                                |> Map.new()
     %Dvrf{
       t: t,
       n: n,
@@ -96,7 +99,7 @@ defmodule Dvrf do
       # Find a generator of (Z_p)* first
       # then square it to get a generator of Z_q
       :maths.mod_exp(x, 2, p) != 1 && :maths.mod_exp(x, trunc((p - 1) / 2), p) != 1 ->
-        IO.puts "Generator: #{inspect(:maths.mod_exp(x, 2, p))}"
+        # IO.puts "Generator: #{inspect(:maths.mod_exp(x, 2, p))}"
         :maths.mod_exp(x, 2, p)
       true ->
         get_generator(p, x + 1)
@@ -165,14 +168,14 @@ defmodule Dvrf do
     receive do
       # Receive start order for DKG
       {sender, :dkg} ->
-        IO.puts "Received :dkg"
+        IO.puts "#{inspect(whoami())} Received :dkg"
         state = %{state | client: sender}
         state = get_poly_then_send(state)
         dkg(state, counter + 1)
 
       # Listen mode for subshares
       {sender, {subshare, comm}} ->
-        IO.puts "Received subshare from #{inspect(sender)} to #{inspect(whoami())}"
+        IO.puts "#{inspect(whoami())} Received subshare from #{inspect(sender)}"
         id_me = Map.get(state.view_id, whoami())
         case verify_subshare(subshare, comm, state.g, state.p, id_me) do
           false ->
@@ -190,7 +193,7 @@ defmodule Dvrf do
                 subshares = Map.values(state.view_subshare)
                 share = Enum.sum(subshares)
                 state = %{state | share: share}
-                IO.puts "Process #{inspect(whoami())} exits DKG, share is #{inspect(state.share)}"
+                IO.puts "#{inspect(whoami())} Exits DKG, share is #{inspect(state.share)}"
                 drb_next_round(state)
             end
         end
@@ -239,7 +242,7 @@ defmodule Dvrf do
   # with the same output regardless of which t number of subsignatures we get.
   def get_sign(subsigns, p, q) do
     lambda_set = Enum.map(subsigns, fn x -> elem(x, 0) end)
-    # IO.puts "lambda_set is #{inspect(lambda_set)} by #{inspect(whoami())}"
+    # IO.puts "#{inspect(whoami())} lambda_set is #{inspect(lambda_set)}"
     Enum.map(subsigns, fn x ->
       subsign = elem(x, 1)
       lambda = get_lambda(lambda_set, elem(x, 0), q)
@@ -270,17 +273,21 @@ defmodule Dvrf do
     |> Enum.reduce(fn x, acc -> :maths.mod(x * acc, q) end)
   end
 
+  def get_updated_view_subsign(view, round, pid, subsign) do
+    res = Map.put(view[round], pid, subsign)
+    Map.put(view, round, res)
+  end
+
   # Above are utility functions before DRB
   # Below is DRB
 
   # Transitioning into the next round of DRB
-  # Scenario: drb_next_round() -> drb() -> drb_next_round() -> drb() -> ...
   def drb_next_round(state) do
     state = %{state | round_current: state.round_current + 1}
     cond do
       # Successful completion of DRB
       state.round_current > state.round_max ->
-        IO.puts "Successfully completed by #{inspect(whoami())}"
+        IO.puts "#{inspect(whoami())} Successfully completed!"
       # Ongoing DRB
       true ->
         msg = ["#{state.last_output}", "#{state.round_current}"]
@@ -300,12 +307,21 @@ defmodule Dvrf do
         |> Enum.filter(fn pid -> pid != whoami() end)
         |> Enum.map(fn pid -> send(pid, msg) end)
 
-        # Initialize subsignatures for all nodes (before we start a new round)
-        # and update state by saving my subsignature first
-        view_subsign = Enum.map(state.view, fn a -> {a, nil} end) |> Map.new()
-        state = %{state | view_subsign: view_subsign}
-        state = %{state | view_subsign: Map.put(state.view_subsign, whoami(), subsign)}
-        drb(state, 1)
+        # Update state by recording my new subsignature
+        new = get_updated_view_subsign(state.view_subsign, state.round_current, whoami(), subsign)
+        state = %{state | view_subsign: new}
+        counter = Map.values(state.view_subsign[state.round_current]) |> Enum.count(fn x -> x != nil end)
+        cond do
+          # There are already at least t number of subsignatures received for the round,
+          # which can happen if the network is highly unstable
+          counter >= state.t ->
+            IO.puts "#{inspect(whoami())} Already threshold passed due to unstable network"
+            drb_round_finish(state)
+          # Need to listen for more subsignatures until at least t is reached
+          true ->
+            # IO.puts "#{inspect(whoami())} Entering DRB round #{state.round_current}, counter #{counter}"
+            drb(state, counter)
+        end
     end
   end
 
@@ -316,15 +332,21 @@ defmodule Dvrf do
       {sender, {subsign, nizk_msg, round}} ->
         cond do
           # Can ignore message from a previous round
-          state.round_current != round ->
+          round < state.round_current ->
             drb(state, counter)
           # Check if NIZK returns true
           verify_nizk(subsign, nizk_msg, state) == false ->
-            IO.puts "Invalid NIZK"
+            IO.puts "#{inspect(whoami())} Invalid NIZK"
             drb(state, counter)
-          # Correct round and NIZK
+          # Message from a future round
+          round > state.round_current ->
+            new = get_updated_view_subsign(state.view_subsign, round, sender, subsign)
+            state = %{state | view_subsign: new}
+            drb(state, counter)
+          # Message from the current round
           true ->
-            state = %{state | view_subsign: Map.put(state.view_subsign, sender, subsign)}
+            new = get_updated_view_subsign(state.view_subsign, round, sender, subsign)
+            state = %{state | view_subsign: new}
             counter = counter + 1
             cond do
               # Need to wait for at least t number of subsignatures
@@ -332,16 +354,21 @@ defmodule Dvrf do
                 drb(state, counter)
               # Can make a signature (= round output) out of t subsignatures received
               true ->
-                subsigns = Map.to_list(state.view_subsign)
-                           |> Enum.filter(fn x -> elem(x, 1) != nil end)
-                           |> Enum.map(fn x -> {Map.get(state.view_id, elem(x, 0)), elem(x, 1)} end)
-                # Lagrange interpolation
-                sign = get_sign(subsigns, state.p, state.q)
-                state = %{state | last_output: sign}
-                IO.puts "Output for round #{inspect(round)} is #{inspect(sign)} by #{inspect(whoami())}"
-                drb_next_round(state)
+                drb_round_finish(state)
             end
         end
     end
+  end
+
+  # Wrap up the current round and move on to the next
+  def drb_round_finish(state) do
+    subsigns = Map.to_list(state.view_subsign[state.round_current])
+               |> Enum.filter(fn x -> elem(x, 1) != nil end)
+               |> Enum.map(fn x -> {Map.get(state.view_id, elem(x, 0)), elem(x, 1)} end)
+    # Lagrange interpolation
+    sign = get_sign(subsigns, state.p, state.q)
+    state = %{state | last_output: sign}
+    IO.puts "#{inspect(whoami())} Output for round #{inspect(state.round_current)} is #{inspect(sign)}"
+    drb_next_round(state)
   end
 end
