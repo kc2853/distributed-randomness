@@ -59,9 +59,11 @@ defmodule DvrfTest do
         IO.puts "#{inspect(whoami())} Received round #{inspect(round)}, output #{inspect(sign)}"
         drb = drb ++ [sign]
         cond do
+          # Completion of all the rounds
           round == round_max ->
             IO.puts "#{inspect(whoami())} Final list of outputs #{inspect(drb)}"
             drb
+          # Ongoing DRB
           true ->
             client_listen_loop(drb, round_max)
         end

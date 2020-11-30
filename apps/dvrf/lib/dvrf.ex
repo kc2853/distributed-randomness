@@ -3,16 +3,8 @@ defmodule Dvrf do
   An implementation of the DVRF-DRB protocol.
   """
   import Emulation, only: [spawn: 2, send: 2, timer: 1, now: 0, whoami: 0]
-
-  import Kernel,
-    except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
-
+  import Kernel, except: [spawn: 3, spawn: 1, spawn_link: 1, spawn_link: 3, send: 2]
   require Fuzzers
-  # This allows you to use Elixir's loggers
-  # for messages. See
-  # https://timber.io/blog/the-ultimate-guide-to-logging-in-elixir/
-  # if you are interested in this. Note we currently purge all logs
-  # below Info
   require Logger
 
   # This structure contains all the process state
@@ -194,9 +186,10 @@ defmodule Dvrf do
         # IO.puts "#{inspect(whoami())} Received subshare from #{inspect(sender)}"
         id_me = Map.get(state.view_id, whoami())
         case verify_subshare(subshare, comm, state.g, state.p, id_me) do
+          # We should not end up here due to our QUAL assumption from the outset
           false ->
-            # We should not end up here due to our QUAL assumption from the outset
             raise "QUAL assumption violated"
+          # Normal cases
           true ->
             state = %{state | view_subshare: Map.put(state.view_subshare, sender, subshare)}
             counter = counter + 1
@@ -239,7 +232,7 @@ defmodule Dvrf do
   # Note: In a public bulletin model, one would be able to verify
   # a NIZK without `state` (which only the participants to the DRB
   # have access to in this implementation), as parameters (e.g. p, q, and g)
-  # would be available for anyone (including bystanders).
+  # would be available to everyone (including bystanders).
   def verify_nizk(subsign, nizk_msg, state) do
     {nizk, comm_to_share, hash} = nizk_msg
     {a1, a2, r} = nizk
@@ -404,6 +397,7 @@ defmodule Dvrf do
       state.replier == true ->
         send(state.client, {state.round_current, sign})
         drb_next_round(state)
+      # Normal cases
       true ->
         drb_next_round(state)
     end
