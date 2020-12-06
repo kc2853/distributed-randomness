@@ -22,5 +22,5 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 dvrf-*.tar
 
-# Scratch file for personal notes
-Scratch.txt
+# Scratch files
+*.txt
