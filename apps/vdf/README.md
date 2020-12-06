@@ -1,21 +1,7 @@
 # Vdf
 
-**TODO: Add description**
+A simple Commit-Reveal + VDF scheme which collects random shares from each node and slows it down by passing it through a delay function. This prevents the last node from predicting the output (last revealer attack). Wesolowski’s succinct argument is used to prove the correctness of the output. 
 
-## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `vdf` to your list of dependencies in `mix.exs`:
 
-```elixir
-def deps do
-  [
-    {:vdf, "~> 0.1.0"}
-  ]
-end
-```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/vdf](https://hexdocs.pm/vdf).
 
