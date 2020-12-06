@@ -1,21 +1,3 @@
-# Randrunner
+# RandRunner
 
-**TODO: Add description**
-
-## Installation
-
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `randrunner` to your list of dependencies in `mix.exs`:
-
-```elixir
-def deps do
-  [
-    {:randrunner, "~> 0.1.0"}
-  ]
-end
-```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/randrunner](https://hexdocs.pm/randrunner).
-
+RandRunner improves on the commit-reveal + VDF scheme by providing a trapdoor for quick computation of VDF, known and broadcasted only by the leader (chosen deterministically) for each round. Wesolowski's succint argument in RSA setup is used to prove correctness.
