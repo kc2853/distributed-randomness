@@ -7,55 +7,77 @@ defmodule VdfTest do
 
   @moduletag timeout: :infinity
 
-#   test "setup" do
-#     caller = self()
-#     IO.puts("Caller pid is #{inspect(caller)}")
-#      pp = Vdf.setup(nil, 8, 20, caller)
-#      IO.puts("N is #{pp.n}, T is #{pp.t}")
-#     #  IO.puts("#{inspect(pp.primes)}")
-#      assert pp.t == 20, "N mismatch"
-#   end
-
-#   test "eval and verify" do
-#     pp = Vdf.setup(nil, 8, 6)
-#     IO.puts("N is #{pp.n}, T is #{pp.t}")
-#    #  IO.puts("#{inspect(pp.primes)}")
-#    {h, pi} = Vdf.eval(pp, 5)
-#    IO.puts("h is #{h}, pi is #{pi}")
-#    res = Vdf.verify(pp, 5, h, pi)
-#    IO.puts("Result is #{res}")
-#    assert res == True, "Result verified"
-#  end
-
-
-test "With nodes for N round of randomness" do
+test "Generate N random numbers with trivial delay" do
   Emulation.init()
+  Emulation.append_fuzzers([Fuzzers.delay(2)])
   caller = self()
 
-  nodes = [:a, :b, :c, :d]
+  nodes = [:a, :b, :c, :d, :e, :f, :g, :h, :i, :j]
   lambda = 16
-  time = 4000
-  rcount = 7
+  time = 200000
+  rcount = 20
+  
   client = spawn(:client, fn -> Vdf.become_client(nodes, lambda, time, rcount, caller) end)
 
   base_config = receive do
             state -> 
               state
-              # IO.puts("State received #{inspect(state)}")
           end
-  IO.puts("Base State is #{inspect(base_config)}")
-  # base_config = Vdf.setup_client(nodes, lambda, time, caller) # Identify nodes by numbers rather than alphabet??
-  # IO.puts("Config is #{inspect(base_config)}")
-  IO.puts("Public setup done")
+  IO.puts("Public parameter setup done")
   spawn(:a, fn -> Vdf.become_node(base_config) end)
   spawn(:b, fn -> Vdf.become_node(base_config) end)
   spawn(:c, fn -> Vdf.become_node(base_config) end)
   spawn(:d, fn -> Vdf.become_node(base_config) end)
+  spawn(:e, fn -> Vdf.become_node(base_config) end)
+  spawn(:f, fn -> Vdf.become_node(base_config) end)
+  spawn(:g, fn -> Vdf.become_node(base_config) end)
+  spawn(:h, fn -> Vdf.become_node(base_config) end)
+  spawn(:i, fn -> Vdf.become_node(base_config) end)
+  spawn(:j, fn -> Vdf.become_node(base_config) end)
 
   # # Start listenining for reply from Client (not the vdf nodes)
   receive do
-    # {rnum, res} -> IO.puts("In tester, Random number generated is #{inspect(rnum)} and status is #{res}")
-    res -> IO.puts("In tester, Random number generated is #{inspect(res)}")
+    {res, t} -> 
+      assert Enum.count(res) == rcount
+      IO.puts("In Test, results received from client. The random numbers are #{inspect(res)}")
+      IO.puts("Total time takes is #{t} ms")
+  end
+  
+end
+
+test "Generate N random numbers with non-trivial delay" do
+  Emulation.init()
+  Emulation.append_fuzzers([Fuzzers.delay(500)])
+  caller = self()
+
+  nodes = [:a, :b, :c, :d, :e, :f, :g, :h, :i, :j]
+  lambda = 16
+  time = 200000
+  rcount = 20
+  client = spawn(:client, fn -> Vdf.become_client(nodes, lambda, time, rcount, caller) end)
+
+  base_config = receive do
+            state -> 
+              state
+          end
+  IO.puts("Public parameter setup done")
+  spawn(:a, fn -> Vdf.become_node(base_config) end)
+  spawn(:b, fn -> Vdf.become_node(base_config) end)
+  spawn(:c, fn -> Vdf.become_node(base_config) end)
+  spawn(:d, fn -> Vdf.become_node(base_config) end)
+  spawn(:e, fn -> Vdf.become_node(base_config) end)
+  spawn(:f, fn -> Vdf.become_node(base_config) end)
+  spawn(:g, fn -> Vdf.become_node(base_config) end)
+  spawn(:h, fn -> Vdf.become_node(base_config) end)
+  spawn(:i, fn -> Vdf.become_node(base_config) end)
+  spawn(:j, fn -> Vdf.become_node(base_config) end)
+
+  # # Start listenining for reply from Client (not the vdf nodes)
+  receive do
+    {res, t} -> 
+      assert Enum.count(res) == rcount
+      IO.puts("In Test, results received from client. The random numbers are #{inspect(res)}")
+      IO.puts("Total time takes is #{t} ms")
   end
   
 end
